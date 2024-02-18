@@ -9,7 +9,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4.1.1
         with:
-          repository: n8n-io/n8n
+          repository: Integreme/n8n
           ref: refs/pull/${{ github.event.pull_request.number }}/merge
 
       - run: corepack enable
@@ -46,7 +46,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4.1.1
         with:
-          repository: n8n-io/n8n
+          repository: Integreme/n8n
           ref: refs/pull/${{ github.event.pull_request.number }}/merge
 
       - run: corepack enable
