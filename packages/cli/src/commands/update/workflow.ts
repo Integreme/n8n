@@ -1,51 +1,45 @@
-import { Container } from 'typedi';
-import { Flags } from '@oclif/core';
-import { WorkflowRepository } from '@db/repositories/workflow.repository';
-import { BaseCommand } from '../BaseCommand';
+import { WorkflowRepository } from '@n8n/db';
+import { Command } from '@n8n/decorators';
+import { Container } from '@n8n/di';
+import { z } from 'zod';
 
-export class UpdateWorkflowCommand extends BaseCommand {
-	static description = 'Update workflows';
+import { BaseCommand } from '../base-command';
 
-	static examples = [
-		'$ n8n update:workflow --all --active=false',
-		'$ n8n update:workflow --id=5 --active=true',
-	];
+const flagsSchema = z.object({
+	active: z.string().describe('Active state the workflow/s should be set to').optional(),
+	all: z.boolean().describe('Operate on all workflows').optional(),
+	id: z.string().describe('The ID of the workflow to operate on').optional(),
+});
 
-	static flags = {
-		help: Flags.help({ char: 'h' }),
-		active: Flags.string({
-			description: 'Active state the workflow/s should be set to',
-		}),
-		all: Flags.boolean({
-			description: 'Operate on all workflows',
-		}),
-		id: Flags.string({
-			description: 'The ID of the workflow to operate on',
-		}),
-	};
-
+@Command({
+	name: 'update:workflow',
+	description: 'Update workflows',
+	examples: ['--all --active=false', '--id=5 --active=true'],
+	flagsSchema,
+})
+export class UpdateWorkflowCommand extends BaseCommand<z.infer<typeof flagsSchema>> {
 	async run() {
-		const { flags } = await this.parse(UpdateWorkflowCommand);
+		const { flags } = this;
 
 		if (!flags.all && !flags.id) {
-			console.info('Either option "--all" or "--id" have to be set!');
+			this.logger.error('Either option "--all" or "--id" have to be set!');
 			return;
 		}
 
 		if (flags.all && flags.id) {
-			console.info(
+			this.logger.error(
 				'Either something else on top should be "--all" or "--id" can be set never both!',
 			);
 			return;
 		}
 
 		if (flags.active === undefined) {
-			console.info('No update flag like "--active=true" has been set!');
+			this.logger.error('No update flag like "--active=true" has been set!');
 			return;
 		}
 
 		if (!['false', 'true'].includes(flags.active)) {
-			console.info('Valid values for flag "--active" are only "false" or "true"!');
+			this.logger.error('Valid values for flag "--active" are only "false" or "true"!');
 			return;
 		}
 

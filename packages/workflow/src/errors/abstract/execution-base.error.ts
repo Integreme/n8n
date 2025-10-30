@@ -1,7 +1,8 @@
-import type { Functionality, IDataObject, JsonObject } from '../../Interfaces';
-import { ApplicationError } from '../application.error';
+import { ApplicationError, type ReportingOptions } from '@n8n/errors';
 
-interface ExecutionBaseErrorOptions {
+import type { Functionality, IDataObject, JsonObject } from '../../interfaces';
+
+interface ExecutionBaseErrorOptions extends ReportingOptions {
 	cause?: Error;
 	errorResponse?: JsonObject;
 }
@@ -9,7 +10,7 @@ interface ExecutionBaseErrorOptions {
 export abstract class ExecutionBaseError extends ApplicationError {
 	description: string | null | undefined;
 
-	cause?: Error;
+	override cause?: Error;
 
 	errorResponse?: JsonObject;
 
@@ -21,13 +22,13 @@ export abstract class ExecutionBaseError extends ApplicationError {
 
 	functionality: Functionality = 'regular';
 
-	constructor(message: string, { cause, errorResponse }: ExecutionBaseErrorOptions = {}) {
-		const options = cause instanceof Error ? { cause } : {};
+	constructor(message: string, options: ExecutionBaseErrorOptions = {}) {
 		super(message, options);
 
 		this.name = this.constructor.name;
 		this.timestamp = Date.now();
 
+		const { cause, errorResponse } = options;
 		if (cause instanceof ExecutionBaseError) {
 			this.context = cause.context;
 		} else if (cause && !(cause instanceof Error)) {
@@ -37,8 +38,7 @@ export abstract class ExecutionBaseError extends ApplicationError {
 		if (errorResponse) this.errorResponse = errorResponse;
 	}
 
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	toJSON?(): any {
+	toJSON?() {
 		return {
 			message: this.message,
 			lineNumber: this.lineNumber,

@@ -1,3 +1,6 @@
+import { snakeCase } from 'change-case';
+import set from 'lodash/set';
+import { NodeApiError, NodeConnectionTypes, NodeOperationError } from 'n8n-workflow';
 import type {
 	ICredentialDataDecryptedObject,
 	ICredentialsDecrypted,
@@ -15,10 +18,14 @@ import type {
 	INodeTypeDescription,
 	JsonObject,
 } from 'n8n-workflow';
-import { NodeOperationError } from 'n8n-workflow';
 
-import { snakeCase } from 'change-case';
-import { generatePairedItemData } from '../../../utils/utilities';
+import { companyFields, companyOperations } from './CompanyDescription';
+import { contactFields, contactOperations } from './ContactDescription';
+import { contactListFields, contactListOperations } from './ContactListDescription';
+import { dealFields, dealOperations } from './DealDescription';
+import type { IAssociation, IDeal } from './DealInterface';
+import { engagementFields, engagementOperations } from './EngagementDescription';
+import type { IForm } from './FormInterface';
 import {
 	clean,
 	getAssociations,
@@ -30,22 +37,9 @@ import {
 	hubspotApiRequestAllItems,
 	validateCredentials,
 } from './GenericFunctions';
-
-import { contactFields, contactOperations } from './ContactDescription';
-
-import { contactListFields, contactListOperations } from './ContactListDescription';
-
-import { companyFields, companyOperations } from './CompanyDescription';
-
-import { dealFields, dealOperations } from './DealDescription';
-
-import { engagementFields, engagementOperations } from './EngagementDescription';
-
 import { ticketFields, ticketOperations } from './TicketDescription';
-
-import type { IForm } from './FormInterface';
-
-import type { IAssociation, IDeal } from './DealInterface';
+import { generatePairedItemData } from '../../../utils/utilities';
+import { parseToTimestamp } from './utils/parseToTimestamp';
 
 export class HubspotV2 implements INodeType {
 	description: INodeTypeDescription;
@@ -54,13 +48,14 @@ export class HubspotV2 implements INodeType {
 		this.description = {
 			...baseDescription,
 			group: ['output'],
-			version: 2,
+			version: [2, 2.1, 2.2],
 			subtitle: '={{$parameter["operation"] + ": " + $parameter["resource"]}}',
 			defaults: {
 				name: 'HubSpot',
 			},
-			inputs: ['main'],
-			outputs: ['main'],
+			usableAsTool: true,
+			inputs: [NodeConnectionTypes.Main],
+			outputs: [NodeConnectionTypes.Main],
 			credentials: [
 				{
 					name: 'hubspotApi',
@@ -339,7 +334,18 @@ export class HubspotV2 implements INodeType {
 			async getContactProperties(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
 				const returnData: INodePropertyOptions[] = [];
 				const endpoint = '/properties/v2/contacts/properties';
-				const properties = await hubspotApiRequest.call(this, 'GET', endpoint, {});
+
+				let properties = (await hubspotApiRequest.call(this, 'GET', endpoint, {})) as Array<{
+					label: string;
+					name: string;
+				}>;
+
+				properties = properties.sort((a, b) => {
+					if (a.label < b.label) return -1;
+					if (a.label > b.label) return 1;
+					return 0;
+				});
+
 				for (const property of properties) {
 					const propertyName = property.label;
 					const propertyId = property.name;
@@ -348,6 +354,7 @@ export class HubspotV2 implements INodeType {
 						value: propertyId,
 					});
 				}
+
 				return returnData;
 			},
 			// Get all the contact properties to display them to user so that they can
@@ -670,7 +677,16 @@ export class HubspotV2 implements INodeType {
 			async getDealProperties(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
 				const returnData: INodePropertyOptions[] = [];
 				const endpoint = '/properties/v2/deals/properties';
-				const properties = await hubspotApiRequest.call(this, 'GET', endpoint, {});
+				let properties = (await hubspotApiRequest.call(this, 'GET', endpoint, {})) as Array<{
+					label: string;
+					name: string;
+				}>;
+
+				properties = properties.sort((a, b) => {
+					if (a.label < b.label) return -1;
+					if (a.label > b.label) return 1;
+					return 0;
+				});
 				for (const property of properties) {
 					const propertyName = property.label;
 					const propertyId = property.name;
@@ -696,6 +712,7 @@ export class HubspotV2 implements INodeType {
 					returnData.push({
 						name: propertyName,
 						// Hacky way to get the property type need to be parsed to be use in the api
+						// this is no longer working, properties does not returned in the response
 						value: `${propertyId}|${propertyType}`,
 					});
 				}
@@ -916,11 +933,11 @@ export class HubspotV2 implements INodeType {
 			// select them easily
 			async getOwners(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
 				const returnData: INodePropertyOptions[] = [];
-				const endpoint = '/owners/v2/owners';
-				const owners = await hubspotApiRequest.call(this, 'GET', endpoint);
-				for (const owner of owners) {
+				const endpoint = '/crm/v3/owners';
+				const { results } = await hubspotApiRequest.call(this, 'GET', endpoint);
+				for (const owner of results) {
 					const ownerName = owner.email;
-					const ownerId = owner.ownerId;
+					const ownerId = isNaN(parseInt(owner.id)) ? owner.id : parseInt(owner.id);
 					returnData.push({
 						name: ownerName,
 						value: ownerId,
@@ -1107,13 +1124,13 @@ export class HubspotV2 implements INodeType {
 				};
 			},
 			async searchOwners(this: ILoadOptionsFunctions): Promise<INodeListSearchResult> {
-				const endpoint = '/owners/v2/owners';
-				const owners = await hubspotApiRequest.call(this, 'GET', endpoint, {});
+				const endpoint = '/crm/v3/owners';
+				const { results } = await hubspotApiRequest.call(this, 'GET', endpoint, {});
 				return {
 					// tslint:disable-next-line: no-any
-					results: owners.map((b: any) => ({
+					results: results.map((b: any) => ({
 						name: b.email,
-						value: b.ownerId,
+						value: isNaN(parseInt(b.id)) ? b.id : parseInt(b.id),
 					})),
 				};
 			},
@@ -1128,7 +1145,7 @@ export class HubspotV2 implements INodeType {
 		const qs: IDataObject = {};
 		const resource = this.getNodeParameter('resource', 0);
 		const operation = this.getNodeParameter('operation', 0);
-
+		const version = this.getNode().typeVersion;
 		//https://legacydocs.hubspot.com/docs/methods/lists/contact-lists-overview
 		if (resource === 'contactList') {
 			try {
@@ -1464,6 +1481,125 @@ export class HubspotV2 implements INodeType {
 									value: additionalFields.workEmail,
 								});
 							}
+							if (additionalFields.buyingRole) {
+								const buyingRole = Array.isArray(additionalFields.buyingRole)
+									? (additionalFields.buyingRole as string[]).join(';')
+									: additionalFields.buyingRole;
+								body.push({
+									property: 'hs_buying_role',
+									value: buyingRole,
+								});
+							}
+							if (additionalFields.countryRegionCode) {
+								body.push({
+									property: 'hs_country_region_code',
+									value: additionalFields.countryRegionCode,
+								});
+							}
+							if (additionalFields.emailCustomerQuarantinedReason) {
+								body.push({
+									property: 'hs_email_customer_quarantined_reason',
+									value: additionalFields.emailCustomerQuarantinedReason,
+								});
+							}
+							if (additionalFields.employmentRole) {
+								body.push({
+									property: 'hs_role',
+									value: additionalFields.employmentRole,
+								});
+							}
+							if (additionalFields.employmentSeniority) {
+								body.push({
+									property: 'hs_seniority',
+									value: additionalFields.employmentSeniority,
+								});
+							}
+							if (additionalFields.employmentSubRole) {
+								body.push({
+									property: 'hs_sub_role',
+									value: additionalFields.employmentSubRole,
+								});
+							}
+							if (additionalFields.enrichedEmailBounceDetected) {
+								body.push({
+									property: 'hs_enriched_email_bounce_detected',
+									value: additionalFields.enrichedEmailBounceDetected,
+								});
+							}
+							if (additionalFields.inferredLanguageCodes) {
+								body.push({
+									property: 'hs_inferred_language_codes',
+									value: additionalFields.inferredLanguageCodes,
+								});
+							}
+							if (additionalFields.latestTrafficSource) {
+								body.push({
+									property: 'hs_latest_source',
+									value: additionalFields.latestTrafficSource,
+								});
+							}
+							if (additionalFields.latestTrafficSourceDate) {
+								body.push({
+									property: 'hs_latest_source_timestamp',
+									value: new Date(additionalFields.latestTrafficSourceDate as string).getTime(),
+								});
+							}
+							if (additionalFields.linkedinUrl) {
+								body.push({
+									property: 'hs_linkedin_url',
+									value: additionalFields.linkedinUrl,
+								});
+							}
+							if (additionalFields.memberEmail) {
+								body.push({
+									property: 'hs_content_membership_email',
+									value: additionalFields.memberEmail,
+								});
+							}
+							if (additionalFields.militaryStatus) {
+								body.push({
+									property: 'military_status',
+									value: additionalFields.militaryStatus,
+								});
+							}
+							if (additionalFields.persona) {
+								body.push({
+									property: 'hs_persona',
+									value: additionalFields.persona,
+								});
+							}
+							if (additionalFields.prospectingAgentLastEnrolled) {
+								body.push({
+									property: 'hs_prospecting_agent_last_enrolled',
+									value: new Date(
+										additionalFields.prospectingAgentLastEnrolled as string,
+									).getTime(),
+								});
+							}
+							if (additionalFields.prospectingAgentTotalEnrolledCount) {
+								body.push({
+									property: 'hs_prospecting_agent_total_enrolled_count',
+									value: additionalFields.prospectingAgentTotalEnrolledCount,
+								});
+							}
+							if (additionalFields.stateRegionCode) {
+								body.push({
+									property: 'hs_state_code',
+									value: additionalFields.stateRegionCode,
+								});
+							}
+							if (additionalFields.timeZone) {
+								body.push({
+									property: 'hs_timezone',
+									value: additionalFields.timeZone,
+								});
+							}
+							if (additionalFields.whatsappPhoneNumber) {
+								body.push({
+									property: 'hs_whatsapp_phone_number',
+									value: additionalFields.whatsappPhoneNumber,
+								});
+							}
 
 							if (additionalFields.customPropertiesUi) {
 								const customProperties = (additionalFields.customPropertiesUi as IDataObject)
@@ -1553,7 +1689,7 @@ export class HubspotV2 implements INodeType {
 								const propertiesValues = additionalFields.propertiesCollection // @ts-ignore
 									.propertiesValues as IDataObject;
 								const properties = propertiesValues.properties as string | string[];
-								qs.properties = !Array.isArray(propertiesValues.properties)
+								qs.property = !Array.isArray(propertiesValues.properties)
 									? (properties as string).split(',')
 									: properties;
 								qs.propertyMode = snakeCase(propertiesValues.propertyMode as string);
@@ -1649,14 +1785,17 @@ export class HubspotV2 implements INodeType {
 											delete filter.type;
 											// Hacky way to get the filter value as we concat the values with a | and the type
 											filter.propertyName = filter.propertyName?.toString().split('|')[0];
-											//@ts-ignore
 										}
 										(body.filterGroups as IDataObject[]).push({ filters: filterValues });
 									}
 								}
 								//@ts-ignore
 								if (body.filterGroups.length > 3) {
-									throw new NodeOperationError(this.getNode(), 'You can only have 3 filter groups');
+									throw new NodeOperationError(
+										this.getNode(),
+										'You can only have 3 filter groups',
+										{ itemIndex: i },
+									);
 								}
 							}
 
@@ -2441,6 +2580,7 @@ export class HubspotV2 implements INodeType {
 								qs.includeAssociations = filters.includeAssociations as boolean;
 							}
 
+							//for version 2
 							if (filters.propertiesCollection) {
 								const propertiesValues = filters.propertiesCollection // @ts-ignore
 									.propertiesValues as IDataObject;
@@ -2449,6 +2589,18 @@ export class HubspotV2 implements INodeType {
 									? (properties as string).split(',')
 									: properties;
 								qs.propertyMode = snakeCase(propertiesValues.propertyMode as string);
+							}
+
+							//for version > 2
+							if (filters.properties) {
+								const properties = filters.properties as string | string[];
+								qs.properties = !Array.isArray(properties) ? properties.split(',') : properties;
+							}
+							if (filters.propertiesWithHistory) {
+								const properties = filters.propertiesWithHistory as string | string[];
+								qs.propertiesWithHistory = !Array.isArray(properties)
+									? properties.split(',')
+									: properties;
 							}
 
 							const endpoint = '/deals/v1/deal/paged';
@@ -2538,7 +2690,11 @@ export class HubspotV2 implements INodeType {
 								}
 								//@ts-ignore
 								if (body.filterGroups.length > 3) {
-									throw new NodeOperationError(this.getNode(), 'You can only have 3 filter groups');
+									throw new NodeOperationError(
+										this.getNode(),
+										'You can only have 3 filter groups',
+										{ itemIndex: i },
+									);
 								}
 							}
 
@@ -2581,13 +2737,19 @@ export class HubspotV2 implements INodeType {
 								);
 							}
 
+							const ownerId =
+								associations.ownerId && typeof associations.ownerId === 'number'
+									? associations.ownerId
+									: undefined;
+
 							const body: {
-								engagement: { type: string };
+								engagement: { type: string; ownerId?: number; timestamp?: number };
 								metadata: IDataObject;
 								associations: IDataObject;
 							} = {
 								engagement: {
 									type: type.toUpperCase(),
+									ownerId,
 								},
 								metadata: {},
 								associations: {},
@@ -2599,6 +2761,13 @@ export class HubspotV2 implements INodeType {
 
 							if (type === 'task') {
 								body.metadata = getTaskMetadata(metadata);
+								if (version >= 2.2) {
+									const dueDateParameter = this.getNodeParameter('dueDate', i, null);
+									if (dueDateParameter) {
+										const timestamp = parseToTimestamp(dueDateParameter);
+										body.engagement.timestamp = timestamp;
+									}
+								}
 							}
 
 							if (type === 'meeting') {
@@ -3017,27 +3186,24 @@ export class HubspotV2 implements INodeType {
 						{ itemData: { item: i } },
 					);
 					returnData.push(...executionData);
-				} catch (errorObject) {
-					const error = errorObject.cause.cause ? errorObject.cause : errorObject;
+				} catch (error) {
 					if (
-						error.cause.error?.validationResults &&
-						error.cause.error.validationResults[0].error === 'INVALID_EMAIL'
+						error.cause?.error?.validationResults &&
+						error.cause.error.validationResults[0]?.error === 'INVALID_EMAIL'
 					) {
-						throw new NodeOperationError(
-							this.getNode(),
-							error.cause.error.validationResults[0].message as string,
-						);
+						const message = error.cause?.error?.validationResults?.[0]?.message as string;
+						set(error, 'message', message);
 					}
-					if (error.cause.error?.message !== 'The resource you are requesting could not be found') {
+					if (
+						error.cause?.error?.message !== 'The resource you are requesting could not be found'
+					) {
 						if (error.httpCode === '404' && error.description === 'resource not found') {
-							throw new NodeOperationError(
-								this.getNode(),
-								`${error.node.parameters.resource} #${
-									error.node.parameters[`${error.node.parameters.resource}Id`].value
-								} could not be found. Check your ${error.node.parameters.resource} ID is correct`,
-							);
+							const message = `${error.node.parameters.resource} #${
+								error.node.parameters[`${error.node.parameters.resource}Id`].value
+							} could not be found. Check your ${error.node.parameters.resource} ID is correct`;
+
+							set(error, 'message', message);
 						}
-						throw new NodeOperationError(this.getNode(), error as string);
 					}
 					if (this.continueOnFail()) {
 						returnData.push({
@@ -3045,6 +3211,9 @@ export class HubspotV2 implements INodeType {
 							pairedItem: { item: i },
 						});
 						continue;
+					}
+					if (error instanceof NodeApiError) {
+						set(error, 'context.itemIndex', i);
 					}
 					throw error;
 				}

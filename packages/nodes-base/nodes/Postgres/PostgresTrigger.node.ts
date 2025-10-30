@@ -1,11 +1,13 @@
 import {
-	NodeOperationError,
+	TriggerCloseError,
 	type IDataObject,
 	type INodeType,
 	type INodeTypeDescription,
 	type ITriggerFunctions,
 	type ITriggerResponse,
+	NodeConnectionTypes,
 } from 'n8n-workflow';
+
 import {
 	pgTriggerFunction,
 	initDB,
@@ -30,15 +32,15 @@ export class PostgresTrigger implements INodeType {
 			header: '',
 			executionsHelp: {
 				inactive:
-					"<b>While building your workflow</b>, click the 'listen' button, then trigger a Postgres event. This will trigger an execution, which will show up in this editor.<br /> <br /><b>Once you're happy with your workflow</b>, <a data-key='activate'>activate</a> it. Then every time a change is detected, the workflow will execute. These executions will show up in the <a data-key='executions'>executions list</a>, but not in the editor.",
+					"<b>While building your workflow</b>, click the 'execute step' button, then trigger a Postgres event. This will trigger an execution, which will show up in this editor.<br /> <br /><b>Once you're happy with your workflow</b>, <a data-key='activate'>activate</a> it. Then every time a change is detected, the workflow will execute. These executions will show up in the <a data-key='executions'>executions list</a>, but not in the editor.",
 				active:
-					"<b>While building your workflow</b>, click the 'listen' button, then trigger a Postgres event. This will trigger an execution, which will show up in this editor.<br /> <br /><b>Your workflow will also execute automatically</b>, since it's activated. Every time a change is detected, this node will trigger an execution. These executions will show up in the <a data-key='executions'>executions list</a>, but not in the editor.",
+					"<b>While building your workflow</b>, click the 'execute step' button, then trigger a Postgres event. This will trigger an execution, which will show up in this editor.<br /> <br /><b>Your workflow will also execute automatically</b>, since it's activated. Every time a change is detected, this node will trigger an execution. These executions will show up in the <a data-key='executions'>executions list</a>, but not in the editor.",
 			},
 			activationHint:
 				"Once you've finished building your workflow, <a data-key='activate'>activate</a> it to have it also listen continuously (you just won't see those executions here).",
 		},
 		inputs: [],
-		outputs: ['main'],
+		outputs: [NodeConnectionTypes.Main],
 		credentials: [
 			{
 				name: 'postgres',
@@ -209,6 +211,33 @@ export class PostgresTrigger implements INodeType {
 					},
 				],
 			},
+			{
+				displayName: 'Options',
+				name: 'options',
+				type: 'collection',
+				placeholder: 'Add option',
+				default: {},
+				options: [
+					{
+						displayName: 'Connection Timeout',
+						name: 'connectionTimeout',
+						type: 'number',
+						default: 30,
+						description: 'Number of seconds reserved for connecting to the database',
+					},
+					{
+						displayName: 'Delay Closing Idle Connection',
+						name: 'delayClosingIdleConnection',
+						type: 'number',
+						default: 0,
+						description:
+							'Number of seconds to wait before idle connection would be eligible for closing',
+						typeOptions: {
+							minValue: 0,
+						},
+					},
+				],
+			},
 		],
 	};
 
@@ -237,7 +266,7 @@ export class PostgresTrigger implements INodeType {
 			this.emit([this.helpers.returnJsonArray([data])]);
 		};
 
-		// create trigger, funstion and channel or use existing channel
+		// create trigger, function and channel or use existing channel
 		const pgNames = prepareNames(this.getNode().id, this.getMode(), additionalFields);
 		if (triggerMode === 'createTrigger') {
 			await pgTriggerFunction.call(
@@ -257,34 +286,41 @@ export class PostgresTrigger implements INodeType {
 
 		const cleanUpDb = async () => {
 			try {
-				await connection.none('UNLISTEN $1:name', [pgNames.channelName]);
-				if (triggerMode === 'createTrigger') {
-					const functionName = pgNames.functionName.includes('(')
-						? pgNames.functionName.split('(')[0]
-						: pgNames.functionName;
-					await connection.any('DROP FUNCTION IF EXISTS $1:name CASCADE', [functionName]);
+				try {
+					// check if the connection is healthy
+					await connection.query('SELECT 1');
+				} catch {
+					// connection already closed. Can't perform cleanup
 
-					const schema = this.getNodeParameter('schema', undefined, {
-						extractValue: true,
-					}) as string;
-					const table = this.getNodeParameter('tableName', undefined, {
-						extractValue: true,
-					}) as string;
-
-					await connection.any('DROP TRIGGER IF EXISTS $1:name ON $2:name.$3:name CASCADE', [
-						pgNames.triggerName,
-						schema,
-						table,
-					]);
+					throw new TriggerCloseError(this.getNode(), { level: 'warning' });
 				}
-				connection.client.removeListener('notification', onNotification);
-			} catch (error) {
-				throw new NodeOperationError(
-					this.getNode(),
-					`Postgres Trigger Error: ${(error as Error).message}`,
-				);
+
+				try {
+					await connection.none('UNLISTEN $1:name', [pgNames.channelName]);
+					if (triggerMode === 'createTrigger') {
+						const functionName = pgNames.functionName.includes('(')
+							? pgNames.functionName.split('(')[0]
+							: pgNames.functionName;
+						await connection.any('DROP FUNCTION IF EXISTS $1:name CASCADE', [functionName]);
+
+						const schema = this.getNodeParameter('schema', undefined, {
+							extractValue: true,
+						}) as string;
+						const table = this.getNodeParameter('tableName', undefined, {
+							extractValue: true,
+						}) as string;
+
+						await connection.any('DROP TRIGGER IF EXISTS $1:name ON $2:name.$3:name CASCADE', [
+							pgNames.triggerName,
+							schema,
+							table,
+						]);
+					}
+				} catch (error) {
+					throw new TriggerCloseError(this.getNode(), { cause: error as Error, level: 'error' });
+				}
 			} finally {
-				await db.$pool.end();
+				connection.client.removeListener('notification', onNotification);
 			}
 		};
 

@@ -1,28 +1,26 @@
-import validator from 'validator';
-import type { SuperAgentTest } from 'supertest';
-
-import config from '@/config';
-import type { User } from '@db/entities/User';
 import {
 	randomEmail,
 	randomInvalidPassword,
 	randomName,
 	randomValidPassword,
-} from './shared/random';
-import * as testDb from './shared/testDb';
-import * as utils from './shared/utils/';
+	testDb,
+} from '@n8n/backend-test-utils';
+import type { User } from '@n8n/db';
+import { GLOBAL_OWNER_ROLE, UserRepository } from '@n8n/db';
+import { Container } from '@n8n/di';
+import validator from 'validator';
+
+import config from '@/config';
+
 import { createUserShell } from './shared/db/users';
-import { UserRepository } from '@db/repositories/user.repository';
-import Container from 'typedi';
+import * as utils from './shared/utils/';
 
 const testServer = utils.setupTestServer({ endpointGroups: ['owner'] });
 
 let ownerShell: User;
-let authOwnerShellAgent: SuperAgentTest;
 
 beforeEach(async () => {
-	ownerShell = await createUserShell('global:owner');
-	authOwnerShellAgent = testServer.authAgentFor(ownerShell);
+	ownerShell = await createUserShell(GLOBAL_OWNER_ROLE);
 	config.set('userManagement.isInstanceOwnerSetUp', false);
 });
 
@@ -39,7 +37,7 @@ describe('POST /owner/setup', () => {
 			password: randomValidPassword(),
 		};
 
-		const response = await authOwnerShellAgent.post('/owner/setup').send(newOwnerData);
+		const response = await testServer.authlessAgent.post('/owner/setup').send(newOwnerData);
 
 		expect(response.statusCode).toBe(200);
 
@@ -88,7 +86,7 @@ describe('POST /owner/setup', () => {
 			password: randomValidPassword(),
 		};
 
-		const response = await authOwnerShellAgent.post('/owner/setup').send(newOwnerData);
+		const response = await testServer.authlessAgent.post('/owner/setup').send(newOwnerData);
 
 		expect(response.statusCode).toBe(200);
 
@@ -150,7 +148,7 @@ describe('POST /owner/setup', () => {
 
 	test('should fail with invalid inputs', async () => {
 		for (const invalidPayload of INVALID_POST_OWNER_PAYLOADS) {
-			const response = await authOwnerShellAgent.post('/owner/setup').send(invalidPayload);
+			const response = await testServer.authlessAgent.post('/owner/setup').send(invalidPayload);
 			expect(response.statusCode).toBe(400);
 		}
 	});

@@ -1,43 +1,60 @@
-import Container from 'typedi';
+import {
+	getPersonalProject,
+	createWorkflow,
+	getAllSharedWorkflows,
+	getWorkflowById,
+	newWorkflow,
+	testDb,
+} from '@n8n/backend-test-utils';
+import type { Project, User } from '@n8n/db';
+import {
+	TagEntity,
+	CredentialsRepository,
+	TagRepository,
+	SharedWorkflowRepository,
+	WorkflowRepository,
+} from '@n8n/db';
+import { Container } from '@n8n/di';
 import { mock } from 'jest-mock-extended';
-import { v4 as uuid } from 'uuid';
 import type { INode } from 'n8n-workflow';
+import { v4 as uuid } from 'uuid';
 
-import { CredentialsRepository } from '@/databases/repositories/credentials.repository';
-import { TagRepository } from '@/databases/repositories/tag.repository';
+import type { ActiveWorkflowManager } from '@/active-workflow-manager';
 import { ImportService } from '@/services/import.service';
-import { TagEntity } from '@/databases/entities/TagEntity';
-import { WorkflowRepository } from '@/databases/repositories/workflow.repository';
-import { SharedWorkflowRepository } from '@/databases/repositories/sharedWorkflow.repository';
 
-import * as testDb from './shared/testDb';
-import { mockInstance } from '../shared/mocking';
-import { createOwner } from './shared/db/users';
-import { createWorkflow, getWorkflowById } from './shared/db/workflows';
-
-import type { User } from '@db/entities/User';
+import { createMember, createOwner } from './shared/db/users';
 
 describe('ImportService', () => {
 	let importService: ImportService;
 	let tagRepository: TagRepository;
 	let owner: User;
+	let ownerPersonalProject: Project;
+	let mockActiveWorkflowManager: ActiveWorkflowManager;
 
 	beforeAll(async () => {
 		await testDb.init();
 
 		owner = await createOwner();
+		ownerPersonalProject = await getPersonalProject(owner);
 
 		tagRepository = Container.get(TagRepository);
 
-		const credentialsRepository = mockInstance(CredentialsRepository);
+		const credentialsRepository = Container.get(CredentialsRepository);
 
-		credentialsRepository.find.mockResolvedValue([]);
+		mockActiveWorkflowManager = mock<ActiveWorkflowManager>();
 
-		importService = new ImportService(mock(), credentialsRepository, tagRepository);
+		importService = new ImportService(
+			mock(),
+			credentialsRepository,
+			tagRepository,
+			mock(),
+			mock(),
+			mockActiveWorkflowManager,
+		);
 	});
 
 	afterEach(async () => {
-		await testDb.truncate(['Workflow', 'SharedWorkflow', 'Tag', 'WorkflowTagMapping']);
+		await testDb.truncate(['WorkflowEntity', 'SharedWorkflow', 'TagEntity', 'WorkflowTagMapping']);
 	});
 
 	afterAll(async () => {
@@ -47,7 +64,7 @@ describe('ImportService', () => {
 	test('should import credless and tagless workflow', async () => {
 		const workflowToImport = await createWorkflow();
 
-		await importService.importWorkflows([workflowToImport], owner.id);
+		await importService.importWorkflows([workflowToImport], ownerPersonalProject.id);
 
 		const dbWorkflow = await getWorkflowById(workflowToImport.id);
 
@@ -57,21 +74,43 @@ describe('ImportService', () => {
 	});
 
 	test('should make user owner of imported workflow', async () => {
-		const workflowToImport = await createWorkflow();
+		const workflowToImport = newWorkflow();
 
-		await importService.importWorkflows([workflowToImport], owner.id);
+		await importService.importWorkflows([workflowToImport], ownerPersonalProject.id);
 
 		const dbSharing = await Container.get(SharedWorkflowRepository).findOneOrFail({
-			where: { workflowId: workflowToImport.id, userId: owner.id, role: 'workflow:owner' },
+			where: {
+				workflowId: workflowToImport.id,
+				projectId: ownerPersonalProject.id,
+				role: 'workflow:owner',
+			},
 		});
 
-		expect(dbSharing.userId).toBe(owner.id);
+		expect(dbSharing.projectId).toBe(ownerPersonalProject.id);
+	});
+
+	test('should not change the owner if it already exists', async () => {
+		const member = await createMember();
+		const memberPersonalProject = await getPersonalProject(member);
+		const workflowToImport = await createWorkflow(undefined, owner);
+
+		await importService.importWorkflows([workflowToImport], memberPersonalProject.id);
+
+		const sharings = await getAllSharedWorkflows();
+
+		expect(sharings).toMatchObject([
+			expect.objectContaining({
+				workflowId: workflowToImport.id,
+				projectId: ownerPersonalProject.id,
+				role: 'workflow:owner',
+			}),
+		]);
 	});
 
 	test('should deactivate imported workflow if active', async () => {
 		const workflowToImport = await createWorkflow({ active: true });
 
-		await importService.importWorkflows([workflowToImport], owner.id);
+		await importService.importWorkflows([workflowToImport], ownerPersonalProject.id);
 
 		const dbWorkflow = await getWorkflowById(workflowToImport.id);
 
@@ -99,7 +138,7 @@ describe('ImportService', () => {
 
 		const workflowToImport = await createWorkflow({ nodes });
 
-		await importService.importWorkflows([workflowToImport], owner.id);
+		await importService.importWorkflows([workflowToImport], ownerPersonalProject.id);
 
 		const dbWorkflow = await getWorkflowById(workflowToImport.id);
 
@@ -119,7 +158,7 @@ describe('ImportService', () => {
 
 		const workflowToImport = await createWorkflow({ tags: [tag] });
 
-		await importService.importWorkflows([workflowToImport], owner.id);
+		await importService.importWorkflows([workflowToImport], ownerPersonalProject.id);
 
 		const dbWorkflow = await Container.get(WorkflowRepository).findOneOrFail({
 			where: { id: workflowToImport.id },
@@ -140,7 +179,7 @@ describe('ImportService', () => {
 
 		const workflowToImport = await createWorkflow({ tags: [tag] });
 
-		await importService.importWorkflows([workflowToImport], owner.id);
+		await importService.importWorkflows([workflowToImport], ownerPersonalProject.id);
 
 		const dbWorkflow = await Container.get(WorkflowRepository).findOneOrFail({
 			where: { id: workflowToImport.id },
@@ -159,7 +198,7 @@ describe('ImportService', () => {
 
 		const workflowToImport = await createWorkflow({ tags: [tag] });
 
-		await importService.importWorkflows([workflowToImport], owner.id);
+		await importService.importWorkflows([workflowToImport], ownerPersonalProject.id);
 
 		const dbWorkflow = await Container.get(WorkflowRepository).findOneOrFail({
 			where: { id: workflowToImport.id },
@@ -173,5 +212,12 @@ describe('ImportService', () => {
 		const dbTag = await tagRepository.findOneOrFail({ where: { name: tag.name } });
 
 		expect(dbTag.name).toBe(tag.name); // tag created
+	});
+
+	test('should remove workflow from ActiveWorkflowManager when workflow has ID', async () => {
+		const workflowWithId = await createWorkflow({ active: true });
+		await importService.importWorkflows([workflowWithId], ownerPersonalProject.id);
+
+		expect(mockActiveWorkflowManager.remove).toHaveBeenCalledWith(workflowWithId.id);
 	});
 });

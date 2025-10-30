@@ -1,14 +1,14 @@
-/* eslint-disable n8n-nodes-base/node-dirname-against-convention */
-import {
-	NodeConnectionType,
-	type IDataObject,
-	type IExecuteFunctions,
-	type INodeExecutionData,
-	type INodeType,
-	type INodeTypeDescription,
+import type { BaseChatMemory } from '@langchain/community/memory/chat_memory';
+import type { MessageContent, BaseMessage } from '@langchain/core/messages';
+import { AIMessage, SystemMessage, HumanMessage } from '@langchain/core/messages';
+import { NodeConnectionTypes } from 'n8n-workflow';
+import type {
+	IDataObject,
+	IExecuteFunctions,
+	INodeExecutionData,
+	INodeType,
+	INodeTypeDescription,
 } from 'n8n-workflow';
-import type { BaseChatMemory } from 'langchain/memory';
-import { AIMessage, SystemMessage, HumanMessage, type BaseMessage } from 'langchain/schema';
 
 type MessageRole = 'ai' | 'system' | 'user';
 interface MessageRecord {
@@ -17,33 +17,67 @@ interface MessageRecord {
 	hideFromUI: boolean;
 }
 
-function simplifyMessages(messages: BaseMessage[]) {
-	const chunkedMessages = [];
-	for (let i = 0; i < messages.length; i += 2) {
-		chunkedMessages.push([messages[i], messages[i + 1]]);
+export function simplifyMessages(messages: BaseMessage[]): Array<Record<string, MessageContent>> {
+	if (messages.length === 0) return [];
+
+	const result: Array<Record<string, MessageContent>> = [];
+	let index = 0;
+
+	while (index < messages.length) {
+		const currentGroup: Record<string, MessageContent> = {};
+
+		do {
+			const message = messages[index];
+			const messageType = message.getType();
+
+			if (messageType in currentGroup) {
+				break;
+			}
+
+			currentGroup[messageType] = message.content;
+			index++;
+		} while (index < messages.length);
+
+		result.push(currentGroup);
 	}
 
-	const transformedMessages = chunkedMessages.map((exchange) => {
-		const simplified = {
-			[exchange[0]._getType()]: exchange[0].content,
-		};
-
-		if (exchange[1]) {
-			simplified[exchange[1]._getType()] = exchange[1].content;
-		}
-
-		return simplified;
-	});
-	return transformedMessages;
+	return result;
 }
+
+const prepareOutputSetup = (ctx: IExecuteFunctions, version: number, memory: BaseChatMemory) => {
+	if (version === 1) {
+		//legacy behavior of insert and delete for version 1
+		return async (i: number) => {
+			const messages = await memory.chatHistory.getMessages();
+
+			const serializedMessages = messages?.map((message) => message.toJSON()) ?? [];
+
+			const executionData = ctx.helpers.constructExecutionMetaData(
+				ctx.helpers.returnJsonArray(serializedMessages as unknown as IDataObject[]),
+				{ itemData: { item: i } },
+			);
+
+			return executionData;
+		};
+	}
+	return async (i: number) => {
+		return [
+			{
+				json: { success: true },
+				pairedItem: { item: i },
+			},
+		];
+	};
+};
 
 export class MemoryManager implements INodeType {
 	description: INodeTypeDescription = {
 		displayName: 'Chat Memory Manager',
 		name: 'memoryManager',
 		icon: 'fa:database',
+		iconColor: 'black',
 		group: ['transform'],
-		version: 1,
+		version: [1, 1.1],
 		description: 'Manage chat messages memory and use it in the workflow',
 		defaults: {
 			name: 'Chat Memory Manager',
@@ -51,7 +85,7 @@ export class MemoryManager implements INodeType {
 		codex: {
 			categories: ['AI'],
 			subcategories: {
-				AI: ['Miscellaneous'],
+				AI: ['Miscellaneous', 'Root Nodes'],
 			},
 			resources: {
 				primaryDocumentation: [
@@ -61,24 +95,24 @@ export class MemoryManager implements INodeType {
 				],
 			},
 		},
-		// eslint-disable-next-line n8n-nodes-base/node-class-description-inputs-wrong-regular-node
+
 		inputs: [
 			{
 				displayName: '',
-				type: NodeConnectionType.Main,
+				type: NodeConnectionTypes.Main,
 			},
 			{
 				displayName: 'Memory',
-				type: NodeConnectionType.AiMemory,
+				type: NodeConnectionTypes.AiMemory,
 				required: true,
 				maxConnections: 1,
 			},
 		],
-		// eslint-disable-next-line n8n-nodes-base/node-class-description-outputs-wrong
+
 		outputs: [
 			{
 				displayName: '',
-				type: NodeConnectionType.Main,
+				type: NodeConnectionTypes.Main,
 			},
 		],
 		properties: [
@@ -240,21 +274,46 @@ export class MemoryManager implements INodeType {
 					},
 				},
 			},
+			{
+				displayName: 'Options',
+				name: 'options',
+				placeholder: 'Add Option',
+				type: 'collection',
+				default: {},
+				options: [
+					{
+						displayName: 'Group Messages',
+						name: 'groupMessages',
+						type: 'boolean',
+						default: true,
+						description:
+							'Whether to group messages into a single item or return each message as a separate item',
+					},
+				],
+				displayOptions: {
+					show: {
+						mode: ['load'],
+					},
+				},
+			},
 		],
 	};
 
 	async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
+		const nodeVersion = this.getNode().typeVersion;
+		const items = this.getInputData();
+		const mode = this.getNodeParameter('mode', 0, 'load') as 'load' | 'insert' | 'delete';
 		const memory = (await this.getInputConnectionData(
-			NodeConnectionType.AiMemory,
+			NodeConnectionTypes.AiMemory,
 			0,
 		)) as BaseChatMemory;
 
-		const items = this.getInputData();
-		const result = [];
-		for (let i = 0; i < items.length; i++) {
-			const mode = this.getNodeParameter('mode', i) as 'load' | 'insert' | 'delete';
+		const prepareOutput = prepareOutputSetup(this, nodeVersion, memory);
 
-			let messages = [...(await memory.chatHistory.getMessages())];
+		const returnData: INodeExecutionData[] = [];
+
+		for (let i = 0; i < items.length; i++) {
+			const messages = await memory.chatHistory.getMessages();
 
 			if (mode === 'delete') {
 				const deleteMode = this.getNodeParameter('deleteMode', i) as 'lastN' | 'all';
@@ -272,6 +331,8 @@ export class MemoryManager implements INodeType {
 				} else {
 					await memory.chatHistory.clear();
 				}
+
+				returnData.push(...(await prepareOutput(i)));
 			}
 
 			if (mode === 'insert') {
@@ -301,29 +362,57 @@ export class MemoryManager implements INodeType {
 
 					await memory.chatHistory.addMessage(MessageClass);
 				}
+
+				returnData.push(...(await prepareOutput(i)));
 			}
 
-			// Refresh messages from memory
-			messages = await memory.chatHistory.getMessages();
+			if (mode === 'load') {
+				const simplifyOutput = this.getNodeParameter('simplifyOutput', i, false) as boolean;
+				const options = this.getNodeParameter('options', i);
 
-			const simplifyOutput = this.getNodeParameter('simplifyOutput', i, false) as boolean;
-			if (simplifyOutput && messages) {
-				return [
-					this.helpers.constructExecutionMetaData(
-						this.helpers.returnJsonArray(simplifyMessages(messages)),
-						{ itemData: { item: i } },
-					),
-				];
+				//Load mode, legacy behavior for version 1, buggy - outputs only for single input item
+				if (simplifyOutput && messages.length && nodeVersion === 1) {
+					const groupMessages = options.groupMessages as boolean;
+					const output = simplifyMessages(messages);
+
+					return [
+						this.helpers.constructExecutionMetaData(
+							this.helpers.returnJsonArray(
+								groupMessages ? [{ messages: output, messagesCount: output.length }] : output,
+							),
+							{ itemData: { item: i } },
+						),
+					];
+				}
+
+				let groupMessages = true;
+				//disable grouping if explicitly set to false
+				if (options.groupMessages === false) {
+					groupMessages = false;
+				}
+				//disable grouping if not set and node version is 1 (legacy behavior)
+				if (options.groupMessages === undefined && nodeVersion === 1) {
+					groupMessages = false;
+				}
+
+				let output: IDataObject[] =
+					(simplifyOutput
+						? simplifyMessages(messages)
+						: (messages?.map((message) => message.toJSON()) as unknown as IDataObject[])) ?? [];
+
+				if (groupMessages) {
+					output = [{ messages: output, messagesCount: output.length }];
+				}
+
+				const executionData = this.helpers.constructExecutionMetaData(
+					this.helpers.returnJsonArray(output),
+					{ itemData: { item: i } },
+				);
+
+				returnData.push(...executionData);
 			}
-			const serializedMessages = messages?.map((message) => message.toJSON()) ?? [];
-
-			const executionData = this.helpers.constructExecutionMetaData(
-				this.helpers.returnJsonArray(serializedMessages as unknown as IDataObject[]),
-				{ itemData: { item: i } },
-			);
-			result.push(...executionData);
 		}
 
-		return await this.prepareOutputData(result);
+		return [returnData];
 	}
 }

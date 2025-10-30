@@ -1,6 +1,3 @@
-import type { ContainerOptions, EventContext, Message, ReceiverOptions } from 'rhea';
-import { create_container } from 'rhea';
-
 import type {
 	ITriggerFunctions,
 	IDataObject,
@@ -10,14 +7,17 @@ import type {
 	IDeferredPromise,
 	IRun,
 } from 'n8n-workflow';
-import { deepCopy, jsonParse, NodeOperationError } from 'n8n-workflow';
+import { deepCopy, jsonParse, NodeConnectionTypes, NodeOperationError } from 'n8n-workflow';
+import type { ConnectionOptions, EventContext, Message, ReceiverOptions } from 'rhea';
+import { create_container } from 'rhea';
+
+import type { AmqpCredential } from './types';
 
 export class AmqpTrigger implements INodeType {
 	description: INodeTypeDescription = {
 		displayName: 'AMQP Trigger',
 		name: 'amqpTrigger',
-		// eslint-disable-next-line n8n-nodes-base/node-class-description-icon-not-svg
-		icon: 'file:amqp.png',
+		icon: 'file:amqp.svg',
 		group: ['trigger'],
 		version: 1,
 		description: 'Listens to AMQP 1.0 Messages',
@@ -25,7 +25,7 @@ export class AmqpTrigger implements INodeType {
 			name: 'AMQP Trigger',
 		},
 		inputs: [],
-		outputs: ['main'],
+		outputs: [NodeConnectionTypes.Main],
 		credentials: [
 			{
 				name: 'amqp',
@@ -65,7 +65,7 @@ export class AmqpTrigger implements INodeType {
 				displayName: 'Options',
 				name: 'options',
 				type: 'collection',
-				placeholder: 'Add Option',
+				placeholder: 'Add option',
 				default: {},
 				options: [
 					{
@@ -138,7 +138,7 @@ export class AmqpTrigger implements INodeType {
 	};
 
 	async trigger(this: ITriggerFunctions): Promise<ITriggerResponse> {
-		const credentials = await this.getCredentials('amqp');
+		const credentials = await this.getCredentials<AmqpCredential>('amqp');
 
 		const sink = this.getNodeParameter('sink', '') as string;
 		const clientname = this.getNodeParameter('clientname', '') as string;
@@ -148,7 +148,8 @@ export class AmqpTrigger implements INodeType {
 		const pullMessagesNumber = (options.pullMessagesNumber as number) || 100;
 		const containerId = options.containerId as string;
 		const containerReconnect = (options.reconnect as boolean) || true;
-		const containerReconnectLimit = (options.reconnectLimit as number) || 50;
+		// Keep reconnecting (exponential backoff) forever unless user sets a limit
+		const containerReconnectLimit = (options.reconnectLimit as number) ?? undefined;
 
 		if (sink === '') {
 			throw new NodeOperationError(this.getNode(), 'Queue or Topic required!');
@@ -209,11 +210,11 @@ export class AmqpTrigger implements INodeType {
 
 			let responsePromise: IDeferredPromise<IRun> | undefined = undefined;
 			if (!parallelProcessing) {
-				responsePromise = await this.helpers.createDeferredPromise();
+				responsePromise = this.helpers.createDeferredPromise();
 			}
 			if (responsePromise) {
 				this.emit([this.helpers.returnJsonArray([data as any])], undefined, responsePromise);
-				await responsePromise.promise();
+				await responsePromise.promise;
 			} else {
 				this.emit([this.helpers.returnJsonArray([data as any])]);
 			}
@@ -229,20 +230,22 @@ export class AmqpTrigger implements INodeType {
 		});
 
 		/*
-			Values are documentet here: https://github.com/amqp/rhea#container
+			Values are documented here: https://github.com/amqp/rhea#container
 		 */
-		const connectOptions: ContainerOptions = {
+		const connectOptions: ConnectionOptions = {
 			host: credentials.hostname,
 			hostname: credentials.hostname,
 			port: credentials.port,
 			reconnect: containerReconnect,
 			reconnect_limit: containerReconnectLimit,
+			// Try reconnection even if caused by a fatal error
+			all_errors_non_fatal: true,
 			username: credentials.username ? credentials.username : undefined,
 			password: credentials.password ? credentials.password : undefined,
 			transport: credentials.transportType ? credentials.transportType : undefined,
 			container_id: containerId ? containerId : undefined,
 			id: containerId ? containerId : undefined,
-		};
+		} as unknown as ConnectionOptions;
 		const connection = container.connect(connectOptions);
 
 		const clientOptions: ReceiverOptions = {
@@ -277,11 +280,16 @@ export class AmqpTrigger implements INodeType {
 					connection.close();
 
 					reject(
-						new Error(
-							'Aborted, no message received within 30secs. This 30sec timeout is only set for "manually triggered execution". Active Workflows will listen indefinitely.',
+						new NodeOperationError(
+							this.getNode(),
+							'Aborted because no message received within 15 seconds',
+							{
+								description:
+									'This 15sec timeout is only set for "manually triggered execution". Active Workflows will listen indefinitely.',
+							},
 						),
 					);
-				}, 30000);
+				}, 15000);
 				container.on('message', (context: EventContext) => {
 					// Check if the only property present in the message is body
 					// in which case we only emit the content of the body property

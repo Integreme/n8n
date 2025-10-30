@@ -1,13 +1,20 @@
-import type { GenericValue, IDataObject } from '@/Interfaces';
+import { ExpressionError } from '../../src/errors/expression.error';
+import type { GenericValue, IDataObject } from '../../src/interfaces';
 
-export interface ExpressionTestBase {
-	type: string;
+interface ExpressionTestBase {
+	type: 'evaluation' | 'transform';
 }
 
-export interface ExpressionTestEvaluation extends ExpressionTestBase {
+interface ExpressionTestSuccess extends ExpressionTestBase {
 	type: 'evaluation';
 	input: Array<IDataObject | GenericValue>;
 	output: IDataObject | GenericValue;
+}
+
+interface ExpressionTestFailure extends ExpressionTestBase {
+	type: 'evaluation';
+	input: Array<IDataObject | GenericValue>;
+	error: ExpressionError;
 }
 
 export interface ExpressionTestTransform extends ExpressionTestBase {
@@ -17,6 +24,7 @@ export interface ExpressionTestTransform extends ExpressionTestBase {
 	forceTransform?: boolean;
 }
 
+export type ExpressionTestEvaluation = ExpressionTestSuccess | ExpressionTestFailure;
 export type ExpressionTests = ExpressionTestEvaluation | ExpressionTestTransform;
 
 export interface ExpressionTestFixture {
@@ -265,7 +273,16 @@ export const baseFixtures: ExpressionTestFixture[] = [
 			{
 				type: 'evaluation',
 				input: [],
-				output: undefined,
+				error: new ExpressionError("Node 'node' hasn't been executed", {
+					runIndex: 0,
+					itemIndex: -1,
+					type: 'no_execution_data',
+					functionality: 'pairedItem',
+					messageTemplate:
+						'An expression references this node, but the node is unexecuted. Consider re-wiring your nodes or checking for execution first, i.e. {{ $if( $("{{nodeName}}").isExecuted, <action_if_executed>, "") }}',
+					descriptionKey: 'pairedItemNoConnection',
+					nodeCause: 'node',
+				}),
 			},
 			{ type: 'transform' },
 			{ type: 'transform', forceTransform: true },
