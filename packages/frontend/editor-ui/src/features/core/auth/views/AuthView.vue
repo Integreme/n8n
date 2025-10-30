@@ -44,7 +44,7 @@ const {
 
 <template>
 	<div :class="$style.container">
-		<N8nLogo size="large" :release-channel="releaseChannel" />
+		<N8nLogo size="small" :release-channel="releaseChannel" />
 		<div v-if="subtitle" :class="$style.textContainer">
 			<N8nText size="large">{{ subtitle }}</N8nText>
 		</div>

@@ -2,8 +2,8 @@
 import { useFavicon } from '@vueuse/core';
 import { computed, onMounted, useCssModule, useTemplateRef } from 'vue';
 
-import LogoIcon from './logo-icon.svg';
-import LogoText from './logo-text.svg';
+import CollapsedLogo from './collapsed.svg';
+import IntegremeLogo from './logo.svg';
 
 const props = defineProps<
 	(
@@ -20,11 +20,6 @@ const props = defineProps<
 >();
 
 const { size, releaseChannel } = props;
-
-const showLogoText = computed(() => {
-	if (size === 'large') return true;
-	return !props.collapsed;
-});
 
 const $style = useCssModule();
 const containerClasses = computed(() => {
@@ -44,21 +39,20 @@ onMounted(() => {
 
 	const logoEl = svg.value!.$el;
 
-	// Change the logo fill color inline, so that favicon can also use it
-	const logoColor = releaseChannel === 'dev' ? '#838383' : '#E9984B';
-	logoEl.querySelector('path')?.setAttribute('fill', logoColor);
-
 	// Reuse the SVG as favicon
 	const blob = new Blob([logoEl.outerHTML], { type: 'image/svg+xml' });
 	useFavicon(URL.createObjectURL(blob));
+});
+
+const shouldShowCollapsedLogo = computed(() => {
+	return size === 'small' && props.collapsed;
 });
 </script>
 
 <template>
 	<div :class="containerClasses" data-test-id="n8n-logo">
-		<LogoIcon ref="logo" :class="$style.logo" />
-		<LogoText v-if="showLogoText" :class="$style.logoText" />
-		<slot />
+		<CollapsedLogo v-if="shouldShowCollapsedLogo" ref="logo" :class="$style.logo" />
+		<IntegremeLogo v-else ref="logo" :class="$style.logo" />
 	</div>
 </template>
 
@@ -92,12 +86,22 @@ onMounted(() => {
 }
 
 .sidebarExpanded .logo {
+	width: 100%;
+	max-width: 200px;
+	height: auto;
 	margin-left: var(--spacing--2xs);
 }
 
 .sidebarCollapsed .logo {
 	width: 40px;
-	height: 30px;
+	height: auto;
+	margin-left: var(--spacing--2xs);
 	padding: 0 var(--spacing--4xs);
+}
+
+.logo {
+	display: block;
+	width: 100%;
+	height: auto;
 }
 </style>
