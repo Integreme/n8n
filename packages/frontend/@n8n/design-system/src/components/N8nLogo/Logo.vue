@@ -39,7 +39,6 @@ onMounted(() => {
 
 	const logoEl = svg.value!.$el;
 
-	// Reuse the SVG as favicon
 	const blob = new Blob([logoEl.outerHTML], { type: 'image/svg+xml' });
 	useFavicon(URL.createObjectURL(blob));
 });
@@ -51,8 +50,8 @@ const shouldShowCollapsedLogo = computed(() => {
 
 <template>
 	<div :class="containerClasses" data-test-id="n8n-logo">
-		<CollapsedLogo v-if="shouldShowCollapsedLogo" ref="logo" :class="$style.logo" />
-		<IntegremeLogo v-else ref="logo" :class="$style.logo" />
+		<CollapsedLogo v-if="shouldShowCollapsedLogo" :class="$style.logo" />
+		<IntegremeLogo v-if="!shouldShowCollapsedLogo" :class="$style.logo" />
 	</div>
 </template>
 
@@ -68,6 +67,24 @@ const shouldShowCollapsedLogo = computed(() => {
 	path {
 		fill: var(--color--text--shade-1);
 	}
+}
+
+.collapsedLogo {
+	display: none;
+}
+
+.collapsedLogo.logo {
+	display: block;
+}
+
+.hidden {
+	position: absolute;
+	opacity: 0;
+	pointer-events: none;
+	width: 0;
+	height: 0;
+	overflow: hidden;
+	display: none;
 }
 
 .large {
