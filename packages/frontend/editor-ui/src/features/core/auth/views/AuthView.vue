@@ -44,7 +44,12 @@ const {
 
 <template>
 	<div :class="$style.container">
-		<N8nLogo size="small" :release-channel="releaseChannel" />
+		<N8nLogo
+			size="small"
+			:collapsed="false"
+			:release-channel="releaseChannel"
+			:class="$style.paddingLogo"
+		/>
 		<div v-if="subtitle" :class="$style.textContainer">
 			<N8nText size="large">{{ subtitle }}</N8nText>
 		</div>
@@ -85,5 +90,9 @@ body {
 
 .formContainer {
 	padding-bottom: var(--spacing--xl);
+}
+
+.paddingLogo {
+	padding-bottom: var(--spacing--lg);
 }
 </style>
