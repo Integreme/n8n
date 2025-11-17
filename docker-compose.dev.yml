@@ -1,0 +1,84 @@
+services:
+  n8n-editor:
+    image: n8nio/n8n:local
+    container_name: n8n-editor
+    restart: always
+    ports:
+      - "5678:5678"
+    volumes:
+      - ./n8n-data:/home/node/.n8n
+    networks:
+      - n8n-network
+    env_file:
+      - .env
+    depends_on:
+      - postgres
+      - redis
+
+  n8n-workers:
+    image: n8nio/n8n:local
+    container_name: n8n-workers
+    restart: always
+    volumes:
+      - ./n8n-data:/home/node/.n8n
+    networks:
+      - n8n-network
+    env_file:
+      - .env
+    depends_on:
+      - postgres
+      - redis
+    environment:
+      - QUEUE_MODE=worker
+    command: worker
+
+  n8n-webhook:
+    image: n8nio/n8n:local
+    container_name: n8n-webhook
+    restart: always
+    ports:
+      - "5680:5678"
+    volumes:
+      - ./n8n-data:/home/node/.n8n
+    networks:
+      - n8n-network
+    env_file:
+      - .env
+    depends_on:
+      - postgres
+      - redis
+    command: webhook
+
+  postgres:
+    image: ankane/pgvector
+    container_name: n8n-postgres
+    restart: always
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: n8n
+    volumes:
+      - ./postgres-data:/var/lib/postgresql/data
+    networks:
+      - n8n-network
+    env_file:
+      - .env
+
+  redis:
+    image: redis:alpine
+    container_name: n8n-redis
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - ./redis-data:/data
+    networks:
+      - n8n-network
+    env_file:
+      - .env
+
+networks:
+  n8n-network:
+    driver: bridge
