@@ -1,2 +1,2 @@
 deploy:
-	docker compose -f docker-compose.dev.yml down -v && docker compose -f docker-compose.dev.yml up -d
+	docker compose -f docker-compose.yml down -v && docker compose -f docker-compose.yml up -d --build
